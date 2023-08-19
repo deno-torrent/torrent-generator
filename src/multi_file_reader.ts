@@ -20,7 +20,7 @@ export class MultiFileReader implements Reader {
 
   /**
    * 是否有下一个文件
-   * @returns
+   * @returns boolean true:有下一个文件,false:没有下一个文件
    */
   private hasNextFile() {
     const index = this.#files.indexOf(this.#curFile)
@@ -28,8 +28,11 @@ export class MultiFileReader implements Reader {
     return index < lastIndex
   }
 
-  // 实现标准库的 read 函数
-  // 如果有三个文件,大小分别是13,1,1,p的长度是20,则每次读取的大小分别是13,1,1,null
+  /**
+   * 如果有三个文件,大小分别是13,1,1,p的长度是20,则每次读取的大小分别是13,1,1,null
+   * @param p 用来存储读取数据的字节数组
+   * @returns 读取的长度
+   */
   public async read(p: Uint8Array): Promise<number | null> {
     if (this.#eof) return null
 
@@ -68,7 +71,8 @@ export class MultiFileReader implements Reader {
    * 读取指定长度的字节,不同于上面的read,这个函数不会将文件分割成多个块,而是将多个文件视为一个整体,读取指定长度的字节
    * 如果有三个文件,大小分别是13,1,1,指定读取长度是20,则每次读取的大小分别是15,null
    *
-   * @param length
+   * @param length 读取的长度
+   * @returns 读取到的字节数组,如果读取完毕,则返回null
    */
   public async readChunk(length: number): Promise<Uint8Array | null> {
     while (true) {
@@ -96,7 +100,10 @@ export class MultiFileReader implements Reader {
     }
   }
 
-  public reset = (): void => {
+  /**
+   * 重置读取器,将读取器重置到初始状态
+   */
+  public reset(): void {
     this.#buf.reset()
     this.#curFile = this.#files[0]
     this.#eof = false

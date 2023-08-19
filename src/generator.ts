@@ -1,29 +1,6 @@
-import { Bencoder, SEP, basename, relative, walk } from './deps.ts'
+import { Bencoder, SEP, basename, relative } from './deps.ts'
 import { GeneratorOption, PieceSizeEnum, Torrent } from './types.ts'
-import { calcPieceSize, fileSizeSum, getDefaultCraetedBy, isHiddenFile, sha1sum } from './util.ts'
-
-/**
- * 递归遍历目录,获取所有文件
- * @param entry 目录或者文件路径
- * @param ignoreHiddenFile 是否忽略隐藏文件
- * @returns 文件路径数组
- */
-async function obtainFiles(entry: string, ignoreHiddenFile: boolean) {
-  if (Deno.statSync(entry).isFile) return [entry]
-
-  const files: string[] = []
-  const iterator = walk(entry, {
-    includeFiles: true,
-    includeDirs: false
-  })
-
-  for await (const item of iterator) {
-    if (ignoreHiddenFile && isHiddenFile(item.path)) continue
-    files.push(item.path)
-  }
-
-  return files
-}
+import { calcPieceSize, fileSizeSum, getDefaultCraetedBy, obtainFiles, sha1sum } from './util.ts'
 
 export async function generateTorrent({
   writer,
@@ -40,7 +17,7 @@ export async function generateTorrent({
   createdBy,
   createdAt = Math.floor(Date.now() / 1000)
 }: GeneratorOption) {
-  // 获取所有文件,包含隐藏文件
+  // 获取目录下的所有文件
   let files = await obtainFiles(entry, ignoreHiddenFile)
 
   // 按照路径深度升序排序,['/root/file1','/root/dir1/file2','/root/dir1/dir2/file3']
@@ -87,14 +64,17 @@ export async function generateTorrent({
     }
   }
 
+  // 私有种子
   if (isPrivate) {
     torrent['info']['private'] = 1
   }
 
+  // 评论
   if (comment) {
     torrent['comment'] = comment
   }
 
+  // 来源
   if (source) {
     torrent['source'] = source
   }
@@ -124,6 +104,6 @@ export async function generateTorrent({
     torrent['info']['pieces'] = await sha1sum(files, pieceSize, alignPiece)
   }
 
-  // 写入到stream
+  // 生成种子文件
   await writer.write(await new Bencoder().e(torrent))
 }

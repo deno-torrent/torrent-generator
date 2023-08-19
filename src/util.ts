@@ -1,7 +1,30 @@
-import { Buffer, basename, crypto } from './deps.ts'
+import { Buffer, basename, crypto, walk } from './deps.ts'
 import { logd } from './log.ts'
 import { MultiFileReader } from './multi_file_reader.ts'
 import { PieceSizeEnum } from './types.ts'
+
+/**
+ * 递归遍历目录,获取目录下的所有文件,如果entry是文件,则返回[entry]
+ * @param entry 目录或者文件路径
+ * @param ignoreHiddenFile 是否忽略隐藏文件
+ * @returns 文件路径数组
+ */
+export async function obtainFiles(entry: string, ignoreHiddenFile: boolean) {
+  if (Deno.statSync(entry).isFile) return [entry]
+
+  const files: string[] = []
+  const iterator = walk(entry, {
+    includeFiles: true,
+    includeDirs: false
+  })
+
+  for await (const item of iterator) {
+    if (ignoreHiddenFile && isHiddenFile(item.path)) continue
+    files.push(item.path)
+  }
+
+  return files
+}
 
 /**
  * 按照指定的块大小分割文件,计算每块的SHA1值(20字节),将所有块的SHA1值拼接成一个字符串
