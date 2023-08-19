@@ -126,6 +126,13 @@
     "https://deno.land/x/dt_bencode@0.0.2/src/encoder.ts": "bf436c9edf73d3c97ee761db6e9605296915213e61cd5f3d24da5e205bf15b47",
     "https://deno.land/x/dt_bencode@0.0.2/src/log.ts": "4525ff341573f0d1e5f8007ca132d3ff690f1e46a3123097c1cb7a165d164bea",
     "https://deno.land/x/dt_bencode@0.0.2/src/type.ts": "e036b268552b2ec6246f7838d49b61a32dfff114c299a70449c1248dd2c484eb",
-    "https://deno.land/x/dt_bencode@0.0.2/src/util.ts": "f45ec2f0fbb5ffc3a9e456ff5f5b02931098b37dd557c877faf98745ca0e7927"
+    "https://deno.land/x/dt_bencode@0.0.2/src/util.ts": "f45ec2f0fbb5ffc3a9e456ff5f5b02931098b37dd557c877faf98745ca0e7927",
+    "https://deno.land/x/dt_bencode@0.0.4/mod.ts": "0facbd953029f8d6561148647f795f59bc020a43ea1f385088b530102169ef8c",
+    "https://deno.land/x/dt_bencode@0.0.4/src/decoder.ts": "576055c444892c1b55398490425ea3e6d488d28192a0e97c28a924edf46cd5fc",
+    "https://deno.land/x/dt_bencode@0.0.4/src/deps.ts": "e4ef399ba8b5e8d8db0b7d34f22a972fd18d466fb8635604723870c808be690d",
+    "https://deno.land/x/dt_bencode@0.0.4/src/encoder.ts": "bf436c9edf73d3c97ee761db6e9605296915213e61cd5f3d24da5e205bf15b47",
+    "https://deno.land/x/dt_bencode@0.0.4/src/log.ts": "4525ff341573f0d1e5f8007ca132d3ff690f1e46a3123097c1cb7a165d164bea",
+    "https://deno.land/x/dt_bencode@0.0.4/src/type.ts": "e036b268552b2ec6246f7838d49b61a32dfff114c299a70449c1248dd2c484eb",
+    "https://deno.land/x/dt_bencode@0.0.4/src/util.ts": "f45ec2f0fbb5ffc3a9e456ff5f5b02931098b37dd557c877faf98745ca0e7927"
   }
 }
