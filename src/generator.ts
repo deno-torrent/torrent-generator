@@ -1,4 +1,4 @@
-import { Bencoder, SEP, basename, relative } from './deps.ts'
+import { Bencoder, SEPARATOR, basename, relative } from './deps.ts'
 import { GeneratorOption, PieceSizeEnum, Torrent } from './types.ts'
 import { calcPieceSize, fileSizeSum, getDefaultCraetedBy, obtainFiles, sha1sum } from './util.ts'
 
@@ -21,7 +21,7 @@ export async function generateTorrent({
   let files = await obtainFiles(entry, ignoreHiddenFile)
 
   // 按照路径深度升序排序,['/root/file1','/root/dir1/file2','/root/dir1/dir2/file3']
-  files = files.sort((a, b) => a.split(SEP).length - b.split(SEP).length)
+  files = files.sort((a, b) => a.split(SEPARATOR).length - b.split(SEPARATOR).length)
 
   const singleFileMode = files.length === 1 // 是否为单文件模式
   const sizeOfFiles = await fileSizeSum(files) // 所有文件的总大小
@@ -95,7 +95,7 @@ export async function generateTorrent({
       torrent['info']['files'].push({
         length: await Deno.stat(f).then((stat) => stat.size),
         // dir1/dir2/file.ext => [dir1,dir2,file.ext]
-        path: relative(entry, f).split(SEP)
+        path: relative(entry, f).split(SEPARATOR)
       })
     }
 

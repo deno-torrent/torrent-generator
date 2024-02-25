@@ -1,4 +1,4 @@
-import { Writer } from 'std/types.d.ts'
+import { Writer } from 'std/io/mod.ts'
 
 /**
  * 分块大小枚举
