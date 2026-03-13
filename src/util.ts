@@ -1,133 +1,194 @@
-import { Buffer, MultiFileReader, basename, crypto, walk } from './deps.ts'
-import { logd } from './log.ts'
-import { PieceSizeEnum } from './types.ts'
 /**
- * 递归遍历目录,获取目录下的所有文件,如果entry是文件,则返回[entry]
- * @param entry 目录或者文件路径
- * @param ignoreHiddenFile 是否忽略隐藏文件
- * @returns 文件路径数组
+ * Internal utility functions for torrent generation.
+ * @module
  */
-export async function obtainFiles(entry: string, ignoreHiddenFile: boolean) {
-  if (Deno.statSync(entry).isFile) return [entry]
+
+import { walk } from "@std/fs/walk"
+import { basename } from "@std/path"
+import { crypto } from "@std/crypto/crypto"
+import { logd } from "./log.ts"
+import { MultiFileReader } from "./reader.ts"
+import { PieceSizeEnum } from "./types.ts"
+
+/**
+ * Returns all files under `entry`.
+ *
+ * - If `entry` is a regular file the single-element array `[entry]` is returned.
+ * - If `entry` is a directory it is walked recursively; directories themselves
+ *   are excluded from the result.
+ *
+ * @param entry - Absolute path to a file or directory.
+ * @param ignoreHiddenFile - When `true`, entries whose base name starts with
+ *   `.` are omitted.
+ * @returns Ordered list of absolute file paths found under `entry`.
+ * @throws {Deno.errors.NotFound} If `entry` does not exist.
+ */
+export async function obtainFiles(
+  entry: string,
+  ignoreHiddenFile: boolean,
+): Promise<string[]> {
+  const stat = await Deno.stat(entry)
+  if (stat.isFile) return [entry]
 
   const files: string[] = []
-  const iterator = walk(entry, {
-    includeFiles: true,
-    includeDirs: false
-  })
-
-  for await (const item of iterator) {
+  for await (const item of walk(entry, { includeFiles: true, includeDirs: false })) {
     if (ignoreHiddenFile && isHiddenFile(item.path)) continue
     files.push(item.path)
   }
-
   return files
 }
 
 /**
- * 按照指定的块大小分割文件,计算每块的SHA1值(20字节),将所有块的SHA1值拼接成一个字符串
- * Divide the file according to the specified block size, calculate the SHA1 value (20 bytes) for each block, and concatenate the SHA1 values of all blocks into a string
+ * Computes the concatenated SHA-1 digests (pieces) for a set of files.
+ *
+ * Files are read sequentially as a single byte stream using
+ * {@link MultiFileReader}.  The stream is divided into chunks of `pieceSize`
+ * bytes; the last chunk may be smaller.  Each chunk's SHA-1 digest (20 bytes)
+ * is appended to the result.
+ *
+ * @param files - Ordered list of file paths to hash.
+ * @param pieceSize - Number of bytes per piece (must be ≥ 1).
+ * @param _alignPiece - Reserved for future per-file piece alignment; currently unused.
+ * @returns `Uint8Array` whose length is a multiple of 20 (20 bytes per piece).
+ * @throws {RangeError} If `pieceSize` is less than 1.
  */
-export async function sha1sum(files: string[], pieceSize: number, alignPiece = false): Promise<Uint8Array> {
-  if (pieceSize === 0) {
-    throw new Error('pieceSize must be greater than 0')
-  }
+export async function sha1sum(
+  files: string[],
+  pieceSize: number,
+  _alignPiece = false,
+): Promise<Uint8Array> {
+  if (pieceSize < 1) throw new RangeError("pieceSize must be ≥ 1")
 
-  const sha1Buffer = new Buffer()
-  const pieceCount = Math.ceil((await fileSizeSum(files)) / pieceSize)
+  const totalSize = await fileSizeSum(files)
+  const pieceCount = Math.ceil(totalSize / pieceSize)
+  logd(`pieceSize=${pieceSize}, pieceCount=${pieceCount}, files=${files.length}`)
 
-  logd(`分块大小: ${pieceSize},分块数量: ${pieceCount},文件总数: ${files.length},文件是否对齐: ${alignPiece}`)
-
-  const multiFilReader = new MultiFileReader(files)
-
-  while (true) {
-    const chunk = await multiFilReader.readChunk(pieceSize)
-
-    if (chunk === null) {
-      break
+  const digestParts: Uint8Array[] = []
+  const reader = new MultiFileReader(files)
+  try {
+    let chunk: Uint8Array | null
+    while ((chunk = await reader.readChunk(pieceSize)) !== null) {
+      const digest = await crypto.subtle.digest("SHA-1", chunk as unknown as Uint8Array<ArrayBuffer>)
+      digestParts.push(new Uint8Array(digest))
     }
-
-    // 使用crypto计算chunk的SHA1值
-    const sha1 = await crypto.subtle.digest('SHA-1', chunk)
-    // 将SHA1值写入sha1Buffer
-    await sha1Buffer.write(new Uint8Array(sha1))
+  } finally {
+    reader.close()
   }
 
-  return sha1Buffer.bytes()
+  // Concatenate all 20-byte digests
+  const result = new Uint8Array(digestParts.length * 20)
+  let offset = 0
+  for (const d of digestParts) {
+    result.set(d, offset)
+    offset += 20
+  }
+
+  // Sanity check
+  if (digestParts.length !== pieceCount) {
+    logd(`Warning: expected ${pieceCount} pieces, got ${digestParts.length}`)
+  }
+
+  return result
 }
 
 /**
- * 计算所有文件的大小
- * @param files
- * @returns
+ * Sums the byte sizes of all given files.
+ *
+ * @param files - Absolute file paths whose sizes are summed.
+ * @returns Total size in bytes.
  */
 export async function fileSizeSum(files: string[]): Promise<number> {
-  let size = 0
+  let total = 0
   for (const file of files) {
-    size += await Deno.stat(file).then((stat) => stat.size)
+    const { size } = await Deno.stat(file)
+    total += size
   }
-  return size
+  return total
 }
 
 /**
- * 根据文件的大小选择合适的分块大小
- * Choose the appropriate piece size according to the total size of the file
+ * Selects an appropriate piece size for the given total file size.
  *
- * @param fileSize 文件的大小
- * @return 分块大小
+ * When `pieceSizeEnum` is {@link PieceSizeEnum.SIZE_AUTO} the function
+ * returns the smallest preset that is larger than `fileSize`, capped at
+ * {@link PieceSizeEnum.SIZE_512MB}.  For any other preset the supplied value
+ * is returned unchanged.
+ *
+ * @param fileSize - Total content size in bytes.
+ * @param pieceSizeEnum - Desired preset, or `SIZE_AUTO` for heuristic selection.
+ * @returns Piece size in bytes (≥ 1).
  */
 export function calcPieceSize(fileSize: number, pieceSizeEnum: PieceSizeEnum): number {
-  if (pieceSizeEnum == PieceSizeEnum.SIZE_AUTO) {
-    const PIECE_SIZES = Object.values(PieceSizeEnum)
-      .filter((item) => item !== PieceSizeEnum.SIZE_AUTO.valueOf())
-      .map((item) => item.valueOf() as number)
-      .sort((a, b) => a - b)
-    // 初始化为最大的分块大小
-    let pieceSize = PIECE_SIZES[PIECE_SIZES.length - 1]
-
-    // 根据文件的大小选择合适的分块大小,使用Bittorrent分块大小规则
-    for (const item of PIECE_SIZES) {
-      if (fileSize < item) {
-        pieceSize = item
-        break
-      }
-    }
-
-    return Math.min(pieceSize, PieceSizeEnum.SIZE_512KB.valueOf())
+  if (pieceSizeEnum !== PieceSizeEnum.SIZE_AUTO) {
+    return pieceSizeEnum as number
   }
 
-  return pieceSizeEnum.valueOf()
+  // All numeric preset values in ascending order, excluding SIZE_AUTO (0)
+  const presets = (Object.values(PieceSizeEnum) as number[])
+    .filter((v) => v !== 0 && typeof v === "number")
+    .sort((a, b) => a - b)
+
+  // Pick the smallest preset that exceeds the total file size
+  const selected = presets.find((p) => fileSize < p) ?? presets[presets.length - 1]
+
+  // Cap at SIZE_512MB to avoid unreasonably large pieces
+  return Math.min(selected, PieceSizeEnum.SIZE_512MB as number)
 }
 
 /**
- * 获取最新的tag
+ * Returns the latest git tag from the repository in `major.minor.patch` form.
+ *
+ * Falls back to `"0.0.0"` if git is not available or the repository has no
+ * tags.
+ *
+ * @returns Version string, e.g. `"1.2.3"`.
  */
-export async function getLatestTag() {
-  const DEFAULT_TAG = '0.0.0'
-
-  const command = new Deno.Command(Deno.execPath(), {
-    args: ['git', 'describe', '--tags', '--abbrev=0']
-  })
-  const { code, stdout } = await command.output()
-
-  if (code !== 0) return DEFAULT_TAG
-
-  return new TextDecoder().decode(stdout).trim()
+export async function getLatestTag(): Promise<string> {
+  const DEFAULT = "0.0.0"
+  try {
+    const cmd = new Deno.Command("git", {
+      args: ["describe", "--tags", "--abbrev=0"],
+      stdout: "piped",
+      stderr: "null",
+    })
+    const { code, stdout } = await cmd.output()
+    if (code !== 0) return DEFAULT
+    const tag = new TextDecoder().decode(stdout).trim()
+    return /^\d+\.\d+\.\d+/.test(tag) ? tag : DEFAULT
+  } catch {
+    return DEFAULT
+  }
 }
 
 /**
- * 获取默认的created by
- * @returns 默认的created by,格式为 deno-torrent-generator@{latest tag}
+ * Returns the default `created by` string embedded in new torrents.
+ *
+ * Format: `deno-torrent-generator@<version>`.
+ *
+ * @returns Creator identifier string.
  */
-export async function getDefaultCraetedBy() {
+export async function getDefaultCreatedBy(): Promise<string> {
   return `deno-torrent-generator@${await getLatestTag()}`
 }
 
 /**
- * 检测文件是否是隐藏文件
- * @param file 文件路径
- * @returns 是否是隐藏文件
+ * @deprecated Renamed to {@link getDefaultCreatedBy} (fixed typo in name).
+ * Will be removed in a future version.
  */
-export function isHiddenFile(file: string) {
-  return basename(file).startsWith('.')
+export const getDefaultCraetedBy = getDefaultCreatedBy
+
+/**
+ * Returns `true` when the base name of `filePath` starts with `.`.
+ *
+ * @param filePath - Any file path (absolute or relative).
+ * @returns Whether the file is considered hidden.
+ *
+ * @example
+ * ```ts
+ * isHiddenFile(".DS_Store")   // true
+ * isHiddenFile("readme.txt")  // false
+ * ```
+ */
+export function isHiddenFile(filePath: string): boolean {
+  return basename(filePath).startsWith(".")
 }

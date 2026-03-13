@@ -1,12 +1,78 @@
-import { Bencoder, SEPARATOR, basename, relative } from './deps.ts'
-import { GeneratorOption, PieceSizeEnum, Torrent } from './types.ts'
-import { calcPieceSize, fileSizeSum, getDefaultCraetedBy, obtainFiles, sha1sum } from './util.ts'
+/**
+ * Core torrent generation logic.
+ *
+ * Exposes a single async function {@link generateTorrent} that reads files,
+ * computes SHA-1 piece hashes, and writes a complete `.torrent` file in
+ * Bencode format.
+ *
+ * @module
+ */
 
+import { basename, relative, SEPARATOR } from "@std/path"
+import { encode } from "@deno-torrent/bencode"
+import { PieceSizeEnum } from "./types.ts"
+import type { GeneratorOption, Torrent } from "./types.ts"
+import {
+  calcPieceSize,
+  fileSizeSum,
+  getDefaultCreatedBy,
+  obtainFiles,
+  sha1sum,
+} from "./util.ts"
+
+/**
+ * Generates a BitTorrent `.torrent` file and writes it to `options.writer`.
+ *
+ * Supports both *single-file* (when `entry` points to a regular file) and
+ * *multi-file* (when `entry` points to a directory) torrents.
+ *
+ * File ordering is stable: paths with fewer directory components appear first;
+ * within the same depth files are sorted lexicographically.
+ *
+ * @param options - Generation parameters; see {@link GeneratorOption}.
+ *
+ * @example Single-file torrent
+ * ```ts
+ * import { generateTorrent } from "@deno-torrent/torrent-generator"
+ *
+ * const out = await Deno.open("video.torrent", { write: true, create: true, truncate: true })
+ * await generateTorrent({
+ *   entry: "/media/video.mkv",
+ *   writer: out,
+ *   trackers: [new URL("udp://tracker.openbittracker.com:6969/announce")],
+ * })
+ * out.close()
+ * ```
+ *
+ * @example Multi-file torrent with all options
+ * ```ts
+ * import { generateTorrent, PieceSizeEnum } from "@deno-torrent/torrent-generator"
+ *
+ * const out = await Deno.open("album.torrent", { write: true, create: true, truncate: true })
+ * await generateTorrent({
+ *   entry: "/media/my-album",
+ *   writer: out,
+ *   pieceSizeEnum: PieceSizeEnum.SIZE_512MB,
+ *   ignoreHiddenFile: true,
+ *   isPrivate: true,
+ *   trackers: [
+ *     new URL("udp://tracker1.example.com:6969"),
+ *     new URL("udp://tracker2.example.com:6969"),
+ *   ],
+ *   webSeeds: [new URL("https://mirror.example.com/my-album/")],
+ *   source: "https://example.com/releases/my-album",
+ *   comment: "My favourite album",
+ *   createdBy: "my-app@1.0.0",
+ * })
+ * out.close()
+ * ```
+ *
+ * @throws {Deno.errors.NotFound} If `entry` does not exist on the filesystem.
+ * @throws {Error} If `trackers` is empty (no announce URL can be set).
+ */
 export async function generateTorrent({
   writer,
   entry,
-  // TODO
-  // alignPiece = false,
   pieceSizeEnum = PieceSizeEnum.SIZE_AUTO,
   ignoreHiddenFile = false,
   isPrivate = false,
@@ -15,95 +81,73 @@ export async function generateTorrent({
   source,
   comment,
   createdBy,
-  createdAt = Math.floor(Date.now() / 1000)
-}: GeneratorOption) {
-  // 获取目录下的所有文件
+  createdAt = Math.floor(Date.now() / 1000),
+}: GeneratorOption): Promise<void> {
+  // Collect and sort files by path depth (shallowest first), then lexically
   let files = await obtainFiles(entry, ignoreHiddenFile)
+  files = files.sort((a, b) => {
+    const depthDiff = a.split(SEPARATOR).length - b.split(SEPARATOR).length
+    return depthDiff !== 0 ? depthDiff : a.localeCompare(b)
+  })
 
-  // 按照路径深度升序排序,['/root/file1','/root/dir1/file2','/root/dir1/dir2/file3']
-  files = files.sort((a, b) => a.split(SEPARATOR).length - b.split(SEPARATOR).length)
+  if (files.length === 0) {
+    throw new Error(`No files found under entry: ${entry}`)
+  }
 
-  const singleFileMode = files.length === 1 // 是否为单文件模式
-  const sizeOfFiles = await fileSizeSum(files) // 所有文件的总大小
-  const pieceSize = calcPieceSize(sizeOfFiles, pieceSizeEnum) // 计算分块大小
+  const singleFileMode = files.length === 1
+  const totalSize = await fileSizeSum(files)
+  const pieceSize = calcPieceSize(totalSize, pieceSizeEnum)
 
-  const torrent = {
-    'created by': createdBy ?? (await getDefaultCraetedBy()),
-    'creation date': createdAt,
+  const torrent: Torrent = {
+    "created by": createdBy ?? (await getDefaultCreatedBy()),
+    "creation date": createdAt,
     info: {
       name: basename(entry),
-      'piece length': pieceSize
-    }
-  } as Torrent
+      "piece length": pieceSize,
+    },
+  }
 
-  if (trackers && trackers.length > 0) {
-    // 按照url字符串升序排序
-    trackers = trackers.sort((a, b) => a.toString().localeCompare(b.toString()))
-    // 在单个tracker的情况下,使用announce字段
-    // 例如: 'announce': 'tracker1'
-    torrent['announce'] = trackers[0].toString()
-
-    // 多个tracker,使用announce-list字段,注意每个tracker都是一个数组包裹一个字符串
-    // 例如: 'announce-list': [['tracker1'],['tracker2']]
+  // ── Trackers ─────────────────────────────────────────────────────────────
+  if (trackers.length > 0) {
+    // Sort for deterministic output
+    trackers = [...trackers].sort((a, b) => a.href.localeCompare(b.href))
+    torrent.announce = trackers[0].href
     if (trackers.length > 1) {
-      torrent['announce-list'] = trackers.map((tracker) => [tracker.toString()])
+      // announce-list: each tracker in its own tier (BEP-12)
+      torrent["announce-list"] = trackers.map((t) => [t.href])
     }
   }
 
-  if (webSeeds) {
-    webSeeds = webSeeds.sort((a, b) => a.toString().localeCompare(b.toString()))
-    if (webSeeds.length === 1) {
-      // 在单个url的情况下,值为string
-      // 例如: 'url-list': 'http://example.com'
-      torrent['url-list'] = webSeeds[0].toString()
-    }
-    // 多个url,值为string的数组
-    // 例如: 'url-list': ['http://example.com','http://example2.com']
-    else if (webSeeds.length > 1) {
-      torrent['url-list'] = webSeeds.map((webSeed) => webSeed.toString())
-    }
+  // ── Web seeds (BEP-19) ────────────────────────────────────────────────────
+  if (webSeeds && webSeeds.length > 0) {
+    webSeeds = [...webSeeds].sort((a, b) => a.href.localeCompare(b.href))
+    torrent["url-list"] = webSeeds.length === 1
+      ? webSeeds[0].href
+      : webSeeds.map((w) => w.href)
   }
 
-  // 私有种子
-  if (isPrivate) {
-    torrent['info']['private'] = 1
-  }
+  // ── Optional fields ───────────────────────────────────────────────────────
+  if (isPrivate) torrent.info.private = 1
+  if (comment) torrent.comment = comment
+  if (source) torrent.source = source
 
-  // 评论
-  if (comment) {
-    torrent['comment'] = comment
-  }
-
-  // 来源
-  if (source) {
-    torrent['source'] = source
-  }
-
-  // 单文件模式
+  // ── Piece hashes & file metadata ──────────────────────────────────────────
   if (singleFileMode) {
-    // 文件的长度,单位为字节
-    torrent['info']['length'] = await Deno.stat(files[0]).then((stat) => stat.size)
-    const pieces = await sha1sum(files, pieceSize)
-    // 文件的分块hash
-    torrent['info']['pieces'] = pieces
-  }
-  // 多文件模式
-  else {
-    torrent['info']['files'] = []
-
-    for (const f of files) {
-      torrent['info']['files'].push({
-        length: await Deno.stat(f).then((stat) => stat.size),
-        // dir1/dir2/file.ext => [dir1,dir2,file.ext]
-        path: relative(entry, f).split(SEPARATOR)
-      })
-    }
-
-    // TODO
-    const alignPiece = false
-    torrent['info']['pieces'] = await sha1sum(files, pieceSize, alignPiece)
+    const { size } = await Deno.stat(files[0])
+    torrent.info.length = size
+    torrent.info.pieces = await sha1sum(files, pieceSize)
+  } else {
+    torrent.info.files = await Promise.all(
+      files.map(async (f) => ({
+        length: (await Deno.stat(f)).size,
+        // Produce a path component array relative to the entry directory
+        path: relative(entry, f).split(SEPARATOR),
+      })),
+    )
+    torrent.info.pieces = await sha1sum(files, pieceSize, false)
   }
 
-  // 生成种子文件
-  await writer.write(await new Bencoder().e(torrent))
+  // ── Encode and write ──────────────────────────────────────────────────────
+  // deno-lint-ignore no-explicit-any
+  await writer.write(encode(torrent as any))
 }

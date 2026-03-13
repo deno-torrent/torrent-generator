@@ -1,0 +1,40 @@
+{
+  "name": "@deno-torrent/torrent-generator",
+  "version": "1.0.1",
+  "exports": "./mod.ts",
+  "imports": {
+    "@deno-torrent/bencode": "jsr:@deno-torrent/bencode@^1",
+    "@std/assert": "jsr:@std/assert@^1",
+    "@std/crypto": "jsr:@std/crypto@^1",
+    "@std/fs": "jsr:@std/fs@^1",
+    "@std/path": "jsr:@std/path@^1"
+  },
+  "tasks": {
+    "test": "deno test -A",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+    "check": "deno check mod.ts"
+  },
+  "test": {
+    "include": ["./test"]
+  },
+  "fmt": {
+    "lineWidth": 120,
+    "indentWidth": 2,
+    "singleQuote": false,
+    "semiColons": false
+  },
+  "lint": {
+    "rules": {
+      "include": ["no-unused-vars", "no-explicit-any"]
+    }
+  },
+  "publish": {
+    "exclude": [
+      "test/",
+      ".github/",
+      ".vscode/",
+      ".prettierrc"
+    ]
+  }
+}

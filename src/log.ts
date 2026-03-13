@@ -1,32 +1,40 @@
-let DEBUG_ENABLE = false
+/**
+ * Optional debug-logging utilities.
+ *
+ * Debug output is **disabled by default** and has zero performance impact
+ * unless explicitly enabled via {@link enableDebug}.
+ *
+ * @module
+ */
 
-export function disableDebug() {
-  DEBUG_ENABLE = false
+let DEBUG_ENABLED = false
+
+/** Enable debug log output to stdout. */
+export function enableDebug(): void {
+  DEBUG_ENABLED = true
 }
 
-export function enableDebug() {
-  DEBUG_ENABLE = true
+/** Disable debug log output (default state). */
+export function disableDebug(): void {
+  DEBUG_ENABLED = false
 }
 
-export function logd(message?: any, ...optionalParams: any[]) {
-  if (!DEBUG_ENABLE) return
+/**
+ * Emit a timestamped debug message to stdout.
+ *
+ * Does nothing when debug mode is disabled.
+ *
+ * @param message - Primary message string.
+ * @param params - Additional values forwarded to `console.log`.
+ */
+export function logd(message?: unknown, ...params: unknown[]): void {
+  if (!DEBUG_ENABLED) return
 
-  // format current date: 2021-01-01 00:00:00
-  const date = new Date()
-  const year = date.getFullYear()
-  const month = date.getMonth() + 1
-  const day = date.getDate()
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, "0")
+  const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+    `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
 
-  const hour = date.getHours()
-  const minute = date.getMinutes()
-  const second = date.getSeconds()
-
-  const time = `${year}-${month}-${day} ${hour}:${minute}:${second}`
-
-  // 为time添加颜色
-  const formattedTime = `\x1b[36m${time}\x1b[0m`
-
-  const formattedMessage = `[${formattedTime}] ${message}`
-
-  console.log(formattedMessage, ...optionalParams)
+  // Cyan timestamp
+  console.log(`[\x1b[36m${ts}\x1b[0m] ${message}`, ...params)
 }

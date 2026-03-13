@@ -1,1 +1,19 @@
+# Deno lock file (commit if you want reproducible installs)
 deno.lock
+
+# Generated torrent files
+*.torrent
+!test/torrent/expect.torrent
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.idea/
+*.swp
+*.swo
+
+# Local environment
+.env
+.env.local
