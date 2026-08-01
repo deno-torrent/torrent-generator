@@ -1,6 +1,3 @@
-# Deno lock file (commit if you want reproducible installs)
-deno.lock
-
 # Generated torrent files
 *.torrent
 !test/torrent/expect.torrent

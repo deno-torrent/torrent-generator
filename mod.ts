@@ -22,4 +22,4 @@
 export { generateTorrent } from "./src/generator.ts"
 export { PieceSizeEnum } from "./src/types.ts"
 export type { GeneratorOption, Torrent, Writer } from "./src/types.ts"
-export { enableDebug, disableDebug } from "./src/log.ts"
+export { disableDebug, enableDebug } from "./src/log.ts"

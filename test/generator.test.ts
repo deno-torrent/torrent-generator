@@ -9,7 +9,9 @@
  * reset it.
  */
 
-import { assertEquals, assertGreater, assertInstanceOf } from "@std/assert"
+import { decode } from "@deno-torrent/bencode"
+import type { BencodeValue } from "@deno-torrent/bencode"
+import { assertEquals, assertGreater, assertInstanceOf, assertRejects } from "@std/assert"
 import { join } from "@std/path"
 import { generateTorrent, PieceSizeEnum } from "../mod.ts"
 
@@ -67,6 +69,7 @@ Deno.test("generateTorrent: output is a non-empty bencode dictionary", async () 
   // Bencode dict: starts with 'd' (0x64), ends with 'e' (0x65)
   assertEquals(bytes[0], 0x64, "expected bencode dict start byte 'd'")
   assertEquals(bytes[bytes.length - 1], 0x65, "expected bencode dict end byte 'e'")
+  assertInstanceOf(decode(bytes), Map)
 })
 
 // ─── Structural fields ────────────────────────────────────────────────────────
@@ -82,28 +85,57 @@ function containsString(bytes: Uint8Array, s: string): boolean {
   return false
 }
 
+function decodeDictionary(bytes: Uint8Array): Map<string, BencodeValue> {
+  const value = decode(bytes)
+  if (!(value instanceof Map)) throw new Error("expected a bencode dictionary")
+  return value as Map<string, BencodeValue>
+}
+
+function infoDictionary(bytes: Uint8Array): Map<string, BencodeValue> {
+  const info = decodeDictionary(bytes).get("info")
+  if (!(info instanceof Map)) throw new Error("expected an info dictionary")
+  return info as Map<string, BencodeValue>
+}
+
 Deno.test("generateTorrent: output contains tracker URL", async () => {
   const w = new MemoryWriter()
   await generateTorrent({ ...baseOptions(), writer: w })
-  assertEquals(containsString(w.bytes(), "http://example.com"), true)
+  assertEquals(decodeDictionary(w.bytes()).get("announce"), "http://example.com/")
 })
 
 Deno.test("generateTorrent: output contains creation comment", async () => {
   const w = new MemoryWriter()
   await generateTorrent({ ...baseOptions(), writer: w })
-  assertEquals(containsString(w.bytes(), "comment"), true)
+  assertEquals(decodeDictionary(w.bytes()).get("comment"), "comment")
 })
 
 Deno.test("generateTorrent: output contains created-by string", async () => {
   const w = new MemoryWriter()
   await generateTorrent({ ...baseOptions(), writer: w })
-  assertEquals(containsString(w.bytes(), "createdBy"), true)
+  assertEquals(decodeDictionary(w.bytes()).get("created by"), "createdBy")
 })
 
 Deno.test("generateTorrent: output contains source URL", async () => {
   const w = new MemoryWriter()
   await generateTorrent({ ...baseOptions(), writer: w })
   assertEquals(containsString(w.bytes(), "http://example.com"), true)
+})
+
+Deno.test("generateTorrent: encodes tracker, web-seed, and metadata fields structurally", async () => {
+  const w = new MemoryWriter()
+  await generateTorrent({ ...baseOptions(), writer: w })
+  const torrent = decodeDictionary(w.bytes())
+
+  assertEquals(torrent.get("announce-list"), [
+    ["http://example.com/"],
+    ["http://example2.com/"],
+  ])
+  assertEquals(torrent.get("url-list"), [
+    "http://example.com/",
+    "http://example2.com/",
+  ])
+  assertEquals(torrent.get("source"), "http://example.com")
+  assertEquals(torrent.get("creation date"), 0)
 })
 
 // ─── Determinism ──────────────────────────────────────────────────────────────
@@ -121,7 +153,7 @@ Deno.test("generateTorrent: two identical runs produce identical bytes", async (
 Deno.test("generateTorrent: private torrent contains 'private' key", async () => {
   const w = new MemoryWriter()
   await generateTorrent({ ...baseOptions(), writer: w, isPrivate: true })
-  assertEquals(containsString(w.bytes(), "private"), true)
+  assertEquals(infoDictionary(w.bytes()).get("private"), 1)
 })
 
 Deno.test("generateTorrent: non-private torrent output is shorter than private", async () => {
@@ -143,6 +175,85 @@ Deno.test("generateTorrent: single-file entry produces valid output", async () =
   assertEquals(bytes[0], 0x64)
   assertEquals(bytes[bytes.length - 1], 0x65)
   assertEquals(containsString(bytes, "hello.txt"), true)
+  const info = infoDictionary(bytes)
+  assertEquals(info.get("length"), 13)
+  assertEquals(info.has("files"), false)
+})
+
+Deno.test("generateTorrent: directory with one file produces multi-file metadata", async () => {
+  const w = new MemoryWriter()
+  await generateTorrent({ ...baseOptions(), entry: join(ENTRY, "dir1"), writer: w })
+  const bytes = w.bytes()
+
+  assertEquals(containsString(bytes, "1.txt"), true)
+  assertEquals(containsString(bytes, "files"), true)
+  assertEquals(containsString(bytes, "path"), true)
+  assertEquals(infoDictionary(bytes).has("length"), false)
+})
+
+Deno.test("generateTorrent: missing entry rejects with NotFound", async () => {
+  const w = new MemoryWriter()
+  await assertRejects(
+    () => generateTorrent({ ...baseOptions(), entry: join(ENTRY, "missing-entry"), writer: w }),
+    Deno.errors.NotFound,
+  )
+})
+
+Deno.test("generateTorrent: empty directory rejects because no files remain", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "torrent-generator-empty-" })
+  try {
+    const w = new MemoryWriter()
+    await assertRejects(
+      () => generateTorrent({ ...baseOptions(), entry: directory, writer: w }),
+      Error,
+      "No files found",
+    )
+  } finally {
+    await Deno.remove(directory, { recursive: true })
+  }
+})
+
+Deno.test("generateTorrent: ignoreHiddenFile excludes hidden files", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "torrent-generator-hidden-" })
+  try {
+    await Deno.writeTextFile(join(directory, ".hidden"), "hidden")
+    await Deno.writeTextFile(join(directory, "visible.txt"), "visible")
+
+    const w = new MemoryWriter()
+    await generateTorrent({
+      ...baseOptions(),
+      entry: directory,
+      ignoreHiddenFile: true,
+      writer: w,
+    })
+    const info = infoDictionary(w.bytes())
+    const files = info.get("files")
+    if (!Array.isArray(files)) throw new Error("expected multi-file metadata")
+    assertEquals(files.length, 1)
+  } finally {
+    await Deno.remove(directory, { recursive: true })
+  }
+})
+
+Deno.test("generateTorrent: invalid piece size rejects with RangeError", async () => {
+  const w = new MemoryWriter()
+  await assertRejects(
+    () => generateTorrent({ ...baseOptions(), pieceSizeEnum: -1 as PieceSizeEnum, writer: w }),
+    RangeError,
+  )
+})
+
+Deno.test("generateTorrent: propagates writer errors", async () => {
+  const writer = {
+    write(): Promise<number> {
+      return Promise.reject(new Error("writer failed"))
+    },
+  }
+  await assertRejects(
+    () => generateTorrent({ ...baseOptions(), writer }),
+    Error,
+    "writer failed",
+  )
 })
 
 // ─── Golden-file test ─────────────────────────────────────────────────────────
@@ -152,15 +263,7 @@ Deno.test("generateTorrent: output matches golden fixture", async () => {
   await generateTorrent({ ...baseOptions(), writer: w })
   const actual = w.bytes()
 
-  let expected: Uint8Array
-  try {
-    expected = await Deno.readFile(GOLDEN)
-  } catch {
-    // First run: write the golden file
-    await Deno.mkdir(join(Deno.cwd(), "test", "torrent"), { recursive: true })
-    await Deno.writeFile(GOLDEN, actual)
-    return // Pass on first run
-  }
+  const expected = await Deno.readFile(GOLDEN)
 
   assertEquals(
     actual,

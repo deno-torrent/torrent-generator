@@ -10,15 +10,10 @@
 
 import { basename, relative, SEPARATOR } from "@std/path"
 import { encode } from "@deno-torrent/bencode"
+import type { BencodeValue } from "@deno-torrent/bencode"
 import { PieceSizeEnum } from "./types.ts"
-import type { GeneratorOption, Torrent } from "./types.ts"
-import {
-  calcPieceSize,
-  fileSizeSum,
-  getDefaultCreatedBy,
-  obtainFiles,
-  sha1sum,
-} from "./util.ts"
+import type { GeneratorOption } from "./types.ts"
+import { calcPieceSize, fileSizeSum, getDefaultCreatedBy, obtainFiles, sha1sum } from "./util.ts"
 
 /**
  * Generates a BitTorrent `.torrent` file and writes it to `options.writer`.
@@ -83,6 +78,8 @@ export async function generateTorrent({
   createdBy,
   createdAt = Math.floor(Date.now() / 1000),
 }: GeneratorOption): Promise<void> {
+  const entryStat = await Deno.stat(entry)
+
   // Collect and sort files by path depth (shallowest first), then lexically
   let files = await obtainFiles(entry, ignoreHiddenFile)
   files = files.sort((a, b) => {
@@ -94,60 +91,67 @@ export async function generateTorrent({
     throw new Error(`No files found under entry: ${entry}`)
   }
 
-  const singleFileMode = files.length === 1
+  const singleFileMode = entryStat.isFile
   const totalSize = await fileSizeSum(files)
   const pieceSize = calcPieceSize(totalSize, pieceSizeEnum)
 
-  const torrent: Torrent = {
-    "created by": createdBy ?? (await getDefaultCreatedBy()),
-    "creation date": createdAt,
-    info: {
-      name: basename(entry),
-      "piece length": pieceSize,
-    },
-  }
+  const info = new Map<string, BencodeValue>([
+    ["name", basename(entry)],
+    ["piece length", pieceSize],
+  ])
+  const torrent = new Map<string, BencodeValue>([
+    ["created by", createdBy ?? (await getDefaultCreatedBy())],
+    ["creation date", createdAt],
+    ["info", info],
+  ])
 
   // ── Trackers ─────────────────────────────────────────────────────────────
   if (trackers.length > 0) {
     // Sort for deterministic output
     trackers = [...trackers].sort((a, b) => a.href.localeCompare(b.href))
-    torrent.announce = trackers[0].href
+    torrent.set("announce", trackers[0].href)
     if (trackers.length > 1) {
       // announce-list: each tracker in its own tier (BEP-12)
-      torrent["announce-list"] = trackers.map((t) => [t.href])
+      torrent.set("announce-list", trackers.map((t) => [t.href]))
     }
   }
 
   // ── Web seeds (BEP-19) ────────────────────────────────────────────────────
   if (webSeeds && webSeeds.length > 0) {
     webSeeds = [...webSeeds].sort((a, b) => a.href.localeCompare(b.href))
-    torrent["url-list"] = webSeeds.length === 1
-      ? webSeeds[0].href
-      : webSeeds.map((w) => w.href)
+    torrent.set("url-list", webSeeds.length === 1 ? webSeeds[0].href : webSeeds.map((w) => w.href))
   }
 
   // ── Optional fields ───────────────────────────────────────────────────────
-  if (isPrivate) torrent.info.private = 1
-  if (comment) torrent.comment = comment
-  if (source) torrent.source = source
+  if (isPrivate) info.set("private", 1)
+  if (comment) torrent.set("comment", comment)
+  if (source) torrent.set("source", source)
 
   // ── Piece hashes & file metadata ──────────────────────────────────────────
   if (singleFileMode) {
     const { size } = await Deno.stat(files[0])
-    torrent.info.length = size
-    torrent.info.pieces = await sha1sum(files, pieceSize)
+    info.set("length", size)
+    info.set("pieces", await sha1sum(files, pieceSize))
   } else {
-    torrent.info.files = await Promise.all(
+    const torrentFiles = await Promise.all(
       files.map(async (f) => ({
         length: (await Deno.stat(f)).size,
         // Produce a path component array relative to the entry directory
         path: relative(entry, f).split(SEPARATOR),
       })),
     )
-    torrent.info.pieces = await sha1sum(files, pieceSize, false)
+    info.set(
+      "files",
+      torrentFiles.map(({ length, path }) =>
+        new Map<string, BencodeValue>([
+          ["length", length],
+          ["path", path],
+        ])
+      ),
+    )
+    info.set("pieces", await sha1sum(files, pieceSize, false))
   }
 
   // ── Encode and write ──────────────────────────────────────────────────────
-  // deno-lint-ignore no-explicit-any
-  await writer.write(encode(torrent as any))
+  await writer.write(encode(torrent))
 }

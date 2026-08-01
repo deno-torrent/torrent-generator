@@ -1,9 +1,9 @@
 {
   "name": "@deno-torrent/torrent-generator",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "exports": "./mod.ts",
   "imports": {
-    "@deno-torrent/bencode": "jsr:@deno-torrent/bencode@^1",
+    "@deno-torrent/bencode": "jsr:@deno-torrent/bencode@^2",
     "@std/assert": "jsr:@std/assert@^1",
     "@std/crypto": "jsr:@std/crypto@^1",
     "@std/fs": "jsr:@std/fs@^1",

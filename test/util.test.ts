@@ -1,11 +1,6 @@
 import { assertEquals, assertMatch, assertStrictEquals } from "@std/assert"
 import { PieceSizeEnum } from "../mod.ts"
-import {
-  calcPieceSize,
-  getDefaultCreatedBy,
-  getLatestTag,
-  isHiddenFile,
-} from "../src/util.ts"
+import { calcPieceSize, getDefaultCreatedBy, getLatestTag, isHiddenFile } from "../src/util.ts"
 
 // ─── getLatestTag ─────────────────────────────────────────────────────────────
 
@@ -33,6 +28,10 @@ Deno.test("calcPieceSize: SIZE_AUTO selects smallest preset > fileSize", () => {
   assertStrictEquals(calcPieceSize(64 * MB - 1, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_64MB)
   assertStrictEquals(calcPieceSize(128 * MB - 1, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_128MB)
   assertStrictEquals(calcPieceSize(256 * MB - 1, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_256MB)
+})
+
+Deno.test("calcPieceSize: SIZE_AUTO selects the first preset for empty content", () => {
+  assertStrictEquals(calcPieceSize(0, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_16MB)
 })
 
 Deno.test("calcPieceSize: SIZE_AUTO is capped at SIZE_512MB", () => {
