@@ -92,6 +92,14 @@ export type GeneratorOption = {
   ignoreHiddenFile?: boolean
 
   /**
+   * When `true`, inserts BEP-47 padding files between non-empty files so each
+   * real file starts on a piece boundary. Padding files are logical torrent
+   * entries filled with zero bytes and are not created on disk. Defaults to
+   * `false` to preserve the standard continuous multi-file layout.
+   */
+  alignPiece?: boolean
+
+  /**
    * When `true`, sets the `info.private` flag to `1` in the torrent, which
    * prevents DHT and PEX from being used by compatible clients.
    * Defaults to `false`.

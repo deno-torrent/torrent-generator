@@ -191,6 +191,33 @@ Deno.test("generateTorrent: directory with one file produces multi-file metadata
   assertEquals(infoDictionary(bytes).has("length"), false)
 })
 
+Deno.test("generateTorrent: alignPiece inserts BEP-47 padding files", async () => {
+  const w = new MemoryWriter()
+  await generateTorrent({
+    ...baseOptions(),
+    entry: ENTRY,
+    pieceSizeEnum: PieceSizeEnum.SIZE_16MB,
+    alignPiece: true,
+    writer: w,
+  })
+
+  const info = infoDictionary(w.bytes())
+  const files = info.get("files")
+  const pieces = info.get("pieces")
+  if (!Array.isArray(files) || !(pieces instanceof Uint8Array)) throw new Error("invalid aligned torrent")
+
+  assertEquals(files.length, 5)
+  assertEquals(pieces.length, 3 * 20)
+  const paddingEntries = files.filter((file) => {
+    if (!(file instanceof Map)) return false
+    const path = file.get("path")
+    return Array.isArray(path) && path[0] === ".pad"
+  })
+  assertEquals(paddingEntries.length, 2)
+  assertEquals((paddingEntries[0] as Map<string, BencodeValue>).get("length"), 16 * 1024 * 1024 - 13)
+  assertEquals((paddingEntries[1] as Map<string, BencodeValue>).get("length"), 16 * 1024 * 1024 - 1)
+})
+
 Deno.test("generateTorrent: missing entry rejects with NotFound", async () => {
   const w = new MemoryWriter()
   await assertRejects(

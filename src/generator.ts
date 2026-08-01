@@ -13,7 +13,7 @@ import { encode } from "@deno-torrent/bencode"
 import type { BencodeValue } from "@deno-torrent/bencode"
 import { PieceSizeEnum } from "./types.ts"
 import type { GeneratorOption } from "./types.ts"
-import { calcPieceSize, fileSizeSum, getDefaultCreatedBy, obtainFiles, sha1sum } from "./util.ts"
+import { buildPieceFiles, calcPieceSize, fileSizeSum, getDefaultCreatedBy, obtainFiles, sha1sum } from "./util.ts"
 
 /**
  * Generates a BitTorrent `.torrent` file and writes it to `options.writer`.
@@ -70,6 +70,7 @@ export async function generateTorrent({
   entry,
   pieceSizeEnum = PieceSizeEnum.SIZE_AUTO,
   ignoreHiddenFile = false,
+  alignPiece = false,
   isPrivate = false,
   trackers = [],
   webSeeds = [],
@@ -133,13 +134,15 @@ export async function generateTorrent({
     info.set("length", size)
     info.set("pieces", await sha1sum(files, pieceSize))
   } else {
-    const torrentFiles = await Promise.all(
-      files.map(async (f) => ({
-        length: (await Deno.stat(f)).size,
-        // Produce a path component array relative to the entry directory
-        path: relative(entry, f).split(SEPARATOR),
-      })),
-    )
+    const pieceFiles = alignPiece
+      ? await buildPieceFiles(files, pieceSize)
+      : files.map((file) => ({ file, length: 0, padding: false }))
+    const torrentFiles = await Promise.all(pieceFiles.map(async (pieceFile, index) => ({
+      length: pieceFile.padding ? pieceFile.length : (await Deno.stat(pieceFile.file!)).size,
+      path: pieceFile.padding
+        ? [".pad", `${pieceFile.length}-${index}`]
+        : relative(entry, pieceFile.file!).split(SEPARATOR),
+    })))
     info.set(
       "files",
       torrentFiles.map(({ length, path }) =>
@@ -149,7 +152,7 @@ export async function generateTorrent({
         ])
       ),
     )
-    info.set("pieces", await sha1sum(files, pieceSize, false))
+    info.set("pieces", await sha1sum(files, pieceSize, alignPiece))
   }
 
   // ── Encode and write ──────────────────────────────────────────────────────

@@ -48,16 +48,18 @@ export async function obtainFiles(
  *
  * @param files - Ordered list of file paths to hash.
  * @param pieceSize - Number of bytes per piece (must be ≥ 1).
- * @param _alignPiece - Reserved for future per-file piece alignment; currently unused.
+ * @param alignPiece - When `true`, inserts zero-filled BEP-47 padding between files.
  * @returns `Uint8Array` whose length is a multiple of 20 (20 bytes per piece).
  * @throws {RangeError} If `pieceSize` is less than 1.
  */
 export async function sha1sum(
   files: string[],
   pieceSize: number,
-  _alignPiece = false,
+  alignPiece = false,
 ): Promise<Uint8Array> {
   if (pieceSize < 1) throw new RangeError("pieceSize must be ≥ 1")
+
+  if (alignPiece) return await sha1sumAligned(files, pieceSize)
 
   const totalSize = await fileSizeSum(files)
   const pieceCount = Math.ceil(totalSize / pieceSize)
@@ -88,6 +90,78 @@ export async function sha1sum(
     logd(`Warning: expected ${pieceCount} pieces, got ${digestParts.length}`)
   }
 
+  return result
+}
+
+type PieceFile = {
+  file: string | null
+  length: number
+  padding: boolean
+}
+
+/** Builds the logical file stream used by BEP-47 piece-aligned torrents. */
+export async function buildPieceFiles(files: string[], pieceSize: number): Promise<PieceFile[]> {
+  const sizes = await Promise.all(files.map(async (file) => (await Deno.stat(file)).size))
+  const pieceFiles: PieceFile[] = []
+  let pieceOffset = 0
+
+  for (let index = 0; index < files.length; index++) {
+    const length = sizes[index]
+    if (length > 0 && pieceOffset > 0) {
+      const paddingLength = pieceSize - pieceOffset
+      pieceFiles.push({ file: null, length: paddingLength, padding: true })
+      pieceOffset = 0
+    }
+
+    pieceFiles.push({ file: files[index], length, padding: false })
+    pieceOffset = (pieceOffset + length) % pieceSize
+  }
+
+  return pieceFiles
+}
+
+async function sha1sumAligned(files: string[], pieceSize: number): Promise<Uint8Array> {
+  const pieceFiles = await buildPieceFiles(files, pieceSize)
+  const digests: Uint8Array[] = []
+  const piece = new Uint8Array(pieceSize)
+  let pieceOffset = 0
+
+  const digestPiece = async (length: number): Promise<void> => {
+    const digest = await crypto.subtle.digest("SHA-1", piece.subarray(0, length) as Uint8Array<ArrayBuffer>)
+    digests.push(new Uint8Array(digest))
+  }
+
+  for (const pieceFile of pieceFiles) {
+    if (pieceFile.padding) {
+      piece.fill(0, pieceOffset, pieceOffset + pieceFile.length)
+      pieceOffset += pieceFile.length
+      if (pieceOffset === pieceSize) {
+        await digestPiece(pieceSize)
+        pieceOffset = 0
+      }
+      continue
+    }
+
+    const reader = new MultiFileReader([pieceFile.file!])
+    try {
+      let chunk: Uint8Array | null
+      while ((chunk = await reader.readChunk(pieceSize - pieceOffset)) !== null) {
+        piece.set(chunk, pieceOffset)
+        pieceOffset += chunk.length
+        if (pieceOffset === pieceSize) {
+          await digestPiece(pieceSize)
+          pieceOffset = 0
+        }
+      }
+    } finally {
+      reader.close()
+    }
+  }
+
+  if (pieceOffset > 0) await digestPiece(pieceOffset)
+
+  const result = new Uint8Array(digests.length * 20)
+  digests.forEach((digest, index) => result.set(digest, index * 20))
   return result
 }
 

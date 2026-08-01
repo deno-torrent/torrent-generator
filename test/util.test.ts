@@ -1,6 +1,14 @@
 import { assertEquals, assertMatch, assertStrictEquals } from "@std/assert"
+import { join } from "@std/path"
 import { PieceSizeEnum } from "../mod.ts"
-import { calcPieceSize, getDefaultCreatedBy, getLatestTag, isHiddenFile } from "../src/util.ts"
+import {
+  buildPieceFiles,
+  calcPieceSize,
+  getDefaultCreatedBy,
+  getLatestTag,
+  isHiddenFile,
+  sha1sum,
+} from "../src/util.ts"
 
 // ─── getLatestTag ─────────────────────────────────────────────────────────────
 
@@ -40,6 +48,34 @@ Deno.test("calcPieceSize: SIZE_AUTO is capped at SIZE_512MB", () => {
   assertStrictEquals(calcPieceSize(512 * MB, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_512MB)
   assertStrictEquals(calcPieceSize(1024 * MB, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_512MB)
   assertStrictEquals(calcPieceSize(4096 * MB, PieceSizeEnum.SIZE_AUTO), PieceSizeEnum.SIZE_512MB)
+})
+
+Deno.test("buildPieceFiles: inserts padding before each following non-empty file", async () => {
+  const files = [
+    join(Deno.cwd(), "test", "entry", "dir1", "1.txt"),
+    join(Deno.cwd(), "test", "entry", "dir2", "2.txt"),
+  ]
+  const pieceFiles = await buildPieceFiles(files, 4)
+
+  assertEquals(pieceFiles.map((file) => file.length), [1, 3, 1])
+  assertEquals(pieceFiles.map((file) => file.padding), [false, true, false])
+})
+
+Deno.test("sha1sum: aligned mode hashes zero-filled padding", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "torrent-generator-align-" })
+  try {
+    const first = join(directory, "first")
+    const second = join(directory, "second")
+    await Deno.writeTextFile(first, "abc")
+    await Deno.writeTextFile(second, "de")
+
+    const actual = await sha1sum([first, second], 4, true)
+    const firstDigest = new Uint8Array(await crypto.subtle.digest("SHA-1", new Uint8Array([97, 98, 99, 0])))
+    const secondDigest = new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode("de")))
+    assertEquals(actual, new Uint8Array([...firstDigest, ...secondDigest]))
+  } finally {
+    await Deno.remove(directory, { recursive: true })
+  }
 })
 
 // ─── calcPieceSize – explicit preset ─────────────────────────────────────────

@@ -59,6 +59,7 @@ a multi-file torrent, including a directory containing only one file.
 | `trackers`         | `readonly URL[]` | Yes      | —                                  | Tracker announce URLs.                                |
 | `pieceSizeEnum`    | `PieceSizeEnum`  | No       | `SIZE_AUTO`                        | Piece length preset.                                  |
 | `ignoreHiddenFile` | `boolean`        | No       | `false`                            | Excludes files whose base name starts with `.`.       |
+| `alignPiece`       | `boolean`        | No       | `false`                            | Inserts BEP-47 padding files at Piece boundaries.     |
 | `isPrivate`        | `boolean`        | No       | `false`                            | Adds the private torrent flag to the info dictionary. |
 | `webSeeds`         | `readonly URL[]` | No       | `[]`                               | HTTP/FTP web-seed URLs.                               |
 | `source`           | `string`         | No       | —                                  | Optional source identifier.                           |
@@ -68,6 +69,11 @@ a multi-file torrent, including a directory containing only one file.
 
 Tracker and web-seed URLs are sorted by their serialized URL before encoding so equivalent inputs produce stable
 metadata. Multi-file entries are ordered by path depth and then lexicographically.
+
+When `alignPiece` is `true`, the generator inserts logical `.pad/<length>-<index>` entries between files. Their bytes
+are all zero and they are described in the torrent metadata but are not created beside the source files. This is the
+BEP-47 padding-file approach and keeps the generated `pieces` hashes consistent with the file list. Padding is disabled
+by default for backward compatibility.
 
 ### `PieceSizeEnum`
 
@@ -95,6 +101,7 @@ Intentional non-goals / 明确非目标：
 - The library does not download content or contact trackers.
 - The library does not validate that a tracker or web-seed URL is reachable.
 - The library does not publish torrents or manage magnet links.
+- Piece alignment is available only for multi-file torrents; single-file torrents do not need padding.
 
 ## Debug logging
 
@@ -175,6 +182,9 @@ try {
 ```
 
 `entry` 可以是文件或目录。普通文件生成单文件种子；目录始终生成多文件种子，即使目录中只有一个文件。
+
+设置 `alignPiece: true` 后，库会按照 BEP-47 在文件之间加入逻辑 `.pad/<length>-<index>` 文件，使每个非空真实文件从 Piece
+边界开始。Padding 只存在于 Torrent 元数据中，不会在源目录创建文件；默认值为 `false`。
 
 ### 运行测试
 
